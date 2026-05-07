@@ -6,6 +6,7 @@ import { FontSizeToggle, type FontSize } from "./components/FontSizeToggle";
 import { WidthToggle } from "./components/WidthToggle";
 import { GroupDropdown } from "./components/GroupDropdown";
 import { ViewModeToggle, type ViewMode } from "./components/ViewModeToggle";
+import { SortToggle, SORT_MODES, type SortMode } from "./components/SortToggle";
 import { SearchToggle } from "./components/SearchToggle";
 import { TitleToggle } from "./components/TitleToggle";
 import { RestartButton } from "./components/RestartButton";
@@ -30,6 +31,7 @@ import {
 import { isMarkdownFile } from "./utils/filetype";
 
 const VIEWMODE_STORAGE_KEY = "mo-sidebar-viewmode";
+const SORT_MODE_STORAGE_KEY = "mo-sidebar-sortmode";
 const WIDTH_STORAGE_KEY = "mo-layout-width";
 const SHOW_TITLE_STORAGE_KEY = "mo-sidebar-show-title";
 export const FONT_SIZE_STORAGE_KEY = "mo-font-size";
@@ -97,6 +99,26 @@ export function App() {
     try {
       const stored = localStorage.getItem(VIEWMODE_STORAGE_KEY);
       if (stored) return JSON.parse(stored);
+    } catch {
+      /* ignore */
+    }
+    return {};
+  });
+  const [sortModes, setSortModes] = useState<Record<string, SortMode>>(() => {
+    try {
+      const stored = localStorage.getItem(SORT_MODE_STORAGE_KEY);
+      if (stored) {
+        const parsed = JSON.parse(stored);
+        if (parsed && typeof parsed === "object" && !Array.isArray(parsed)) {
+          const filtered: Record<string, SortMode> = {};
+          for (const [k, v] of Object.entries(parsed)) {
+            if (typeof v === "string" && (SORT_MODES as string[]).includes(v)) {
+              filtered[k] = v as SortMode;
+            }
+          }
+          return filtered;
+        }
+      }
     } catch {
       /* ignore */
     }
@@ -311,10 +333,15 @@ export function App() {
   const { isDragging } = useFileDrop(activeGroup);
 
   const currentViewMode: ViewMode = viewModes[activeGroup] ?? "flat";
+  const currentSortMode: SortMode = sortModes[activeGroup] ?? "manual";
 
   useEffect(() => {
     localStorage.setItem(VIEWMODE_STORAGE_KEY, JSON.stringify(viewModes));
   }, [viewModes]);
+
+  useEffect(() => {
+    localStorage.setItem(SORT_MODE_STORAGE_KEY, JSON.stringify(sortModes));
+  }, [sortModes]);
 
   useEffect(() => {
     localStorage.setItem(SHOW_TITLE_STORAGE_KEY, JSON.stringify(showTitles));
@@ -351,6 +378,13 @@ export function App() {
       return { ...prev, [activeGroup]: nextMode };
     });
   }, [activeGroup]);
+
+  const handleSortModeChange = useCallback(
+    (mode: SortMode) => {
+      setSortModes((prev) => ({ ...prev, [activeGroup]: mode }));
+    },
+    [activeGroup],
+  );
 
   const handleTitleToggle = useCallback(() => {
     setShowTitles((prev) => ({ ...prev, [activeGroup]: !prev[activeGroup] }));
@@ -474,6 +508,7 @@ export function App() {
           onGroupChange={handleGroupChange}
         />
         <ViewModeToggle viewMode={currentViewMode} onToggle={handleViewModeToggle} />
+        <SortToggle sortMode={currentSortMode} onChange={handleSortModeChange} />
         <TitleToggle showTitle={currentShowTitle} onToggle={handleTitleToggle} />
         <SearchToggle isOpen={searchQuery != null} onToggle={handleSearchToggle} />
         <div className="ml-auto flex items-center gap-2">
@@ -491,6 +526,7 @@ export function App() {
             onFileSelect={handleFileSelect}
             onFilesReorder={handleFilesReorder}
             viewMode={currentViewMode}
+            sortMode={currentSortMode}
             showTitle={currentShowTitle}
             searchQuery={searchQuery}
             onSearchQueryChange={setSearchQuery}

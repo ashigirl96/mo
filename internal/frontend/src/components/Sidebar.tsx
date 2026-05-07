@@ -20,6 +20,7 @@ import { buildFileUrl } from "../utils/groups";
 import { isPlainLeftClick } from "../utils/linkClick";
 import { escapeRegExp } from "../utils/regex";
 import type { ViewMode } from "./ViewModeToggle";
+import type { SortMode } from "./SortToggle";
 import { TreeView } from "./TreeView";
 import { FileContextMenu } from "./FileContextMenu";
 import { FileIcon } from "./FileIcon";
@@ -151,6 +152,7 @@ interface SidebarProps {
   onFileSelect: (id: string) => void;
   onFilesReorder: (groupName: string, fileIds: string[]) => void;
   viewMode: ViewMode;
+  sortMode?: SortMode;
   showTitle: boolean;
   searchQuery: string | null;
   onSearchQueryChange: (query: string | null) => void;
@@ -166,6 +168,7 @@ export function Sidebar({
   onFileSelect,
   onFilesReorder,
   viewMode,
+  sortMode = "manual",
   showTitle,
   searchQuery,
   onSearchQueryChange,
@@ -182,13 +185,29 @@ export function Sidebar({
   const searchOpen = searchQuery != null;
   const isSearching = searchQuery != null && searchQuery.length > 0;
 
+  const sortedFiles = useMemo(() => {
+    if (sortMode === "manual") return allFiles;
+    const copy = [...allFiles];
+    if (sortMode === "name") {
+      copy.sort((a, b) => a.name.localeCompare(b.name));
+    } else if (sortMode === "updated") {
+      copy.sort((a, b) => {
+        const ta = a.updatedAt ? Date.parse(a.updatedAt) : 0;
+        const tb = b.updatedAt ? Date.parse(b.updatedAt) : 0;
+        if (tb !== ta) return tb - ta;
+        return a.name.localeCompare(b.name);
+      });
+    }
+    return copy;
+  }, [allFiles, sortMode]);
+
   const files = useMemo(() => {
-    if (!searchQuery) return allFiles;
+    if (!searchQuery) return sortedFiles;
     const q = searchQuery.toLowerCase();
-    return allFiles.filter(
+    return sortedFiles.filter(
       (f) => f.name.toLowerCase().includes(q) || (f.title && f.title.toLowerCase().includes(q)),
     );
-  }, [allFiles, searchQuery]);
+  }, [sortedFiles, searchQuery]);
 
   useEffect(() => {
     if (searchOpen) {
@@ -451,6 +470,7 @@ export function Sidebar({
             activeGroup={activeGroup}
             activeFileId={activeFileId}
             showTitle={showTitle}
+            sortMode={sortMode === "updated" ? "updated" : "name"}
             menuOpenId={menuOpenId}
             otherGroups={otherGroups}
             onFileSelect={onFileSelect}
@@ -462,7 +482,7 @@ export function Sidebar({
             onRemove={handleRemove}
             menuRef={menuRef}
           />
-        ) : (
+        ) : sortMode === "manual" ? (
           <DndContext
             sensors={sensors}
             collisionDetection={closestCenter}
@@ -490,6 +510,26 @@ export function Sidebar({
               ))}
             </SortableContext>
           </DndContext>
+        ) : (
+          files.map((f) => (
+            <FileItem
+              key={f.id}
+              file={f}
+              activeGroup={activeGroup}
+              isActive={f.id === activeFileId}
+              showTitle={showTitle}
+              menuOpenId={menuOpenId}
+              otherGroups={otherGroups}
+              onFileSelect={onFileSelect}
+              onMenuToggle={handleMenuToggle}
+              onOpenInNewTab={handleOpenInNewTab}
+              onCopyPath={handleCopyPath}
+              onCopyLink={handleCopyLink}
+              onMoveToGroup={handleMoveToGroup}
+              onRemove={handleRemove}
+              menuRef={menuRef}
+            />
+          ))
         )}
       </nav>
       {/* Resize handle */}

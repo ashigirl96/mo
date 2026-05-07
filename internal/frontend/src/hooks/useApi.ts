@@ -4,6 +4,7 @@ export interface FileEntry {
   path: string;
   title?: string;
   uploaded?: boolean;
+  updatedAt?: string;
 }
 
 export interface Group {

@@ -30,12 +30,13 @@ import (
 )
 
 type FileEntry struct {
-	Name     string `json:"name"`
-	ID       string `json:"id"`
-	Path     string `json:"path"`
-	Title    string `json:"title,omitempty"`
-	Uploaded bool   `json:"uploaded,omitempty"`
-	content  string // in-memory content for uploaded files
+	Name      string    `json:"name"`
+	ID        string    `json:"id"`
+	Path      string    `json:"path"`
+	Title     string    `json:"title,omitempty"`
+	Uploaded  bool      `json:"uploaded,omitempty"`
+	UpdatedAt time.Time `json:"updatedAt,omitzero"`
+	content   string    // in-memory content for uploaded files
 }
 
 const headFileSizeLimit = 8192
@@ -235,22 +236,26 @@ var ErrBinaryFile = errors.New("binary file is not supported")
 var ErrFileNotFound = errors.New("file not found")
 
 // readFileHead reads the first 8KB of the file at path.
-// Returns the bytes read and any error (os.ErrNotExist is passed through).
-// Non-regular files return an error.
-func readFileHead(path string) ([]byte, error) {
+// Returns the bytes read, the file's modification time, and any error
+// (os.ErrNotExist is passed through). Non-regular files return an error.
+func readFileHead(path string) ([]byte, time.Time, error) {
 	fi, err := os.Stat(path)
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	if !fi.Mode().IsRegular() {
-		return nil, fmt.Errorf("not a regular file: %s", path)
+		return nil, time.Time{}, fmt.Errorf("not a regular file: %s", path)
 	}
 	f, err := os.Open(path) //nolint:gosec
 	if err != nil {
-		return nil, err
+		return nil, time.Time{}, err
 	}
 	defer f.Close()
-	return io.ReadAll(io.LimitReader(f, headFileSizeLimit))
+	b, err := io.ReadAll(io.LimitReader(f, headFileSizeLimit))
+	if err != nil {
+		return nil, time.Time{}, err
+	}
+	return b, fi.ModTime(), nil
 }
 
 func (s *State) AddFile(absPath, groupName string) (*FileEntry, error) {
@@ -267,7 +272,7 @@ func (s *State) AddFile(absPath, groupName string) (*FileEntry, error) {
 	s.mu.RUnlock()
 
 	// Read file head once for both binary check and title extraction.
-	head, err := readFileHead(absPath)
+	head, modTime, err := readFileHead(absPath)
 	if err != nil {
 		if !os.IsNotExist(err) {
 			return nil, fmt.Errorf("failed to read file %s: %w", absPath, err)
@@ -295,10 +300,11 @@ func (s *State) AddFile(absPath, groupName string) (*FileEntry, error) {
 	}
 
 	entry := &FileEntry{
-		Name:  filepath.Base(absPath),
-		ID:    FileID(absPath),
-		Path:  absPath,
-		Title: title,
+		Name:      filepath.Base(absPath),
+		ID:        FileID(absPath),
+		Path:      absPath,
+		Title:     title,
+		UpdatedAt: modTime,
 	}
 	g.Files = append(g.Files, entry)
 
@@ -343,11 +349,12 @@ func (s *State) AddUploadedFile(name, content, groupName string) *FileEntry {
 	title := extractTitle(head)
 
 	entry := &FileEntry{
-		Name:     name,
-		ID:       id,
-		Title:    title,
-		Uploaded: true,
-		content:  content,
+		Name:      name,
+		ID:        id,
+		Title:     title,
+		Uploaded:  true,
+		UpdatedAt: time.Now(),
+		content:   content,
 	}
 	g.Files = append(g.Files, entry)
 
@@ -998,12 +1005,16 @@ func (s *State) scheduleFileChanged(absPath string) {
 }
 
 func (s *State) notifyFileChangedByPath(absPath string) {
-	// Extract the title outside the lock (file I/O should not hold the mutex).
+	// Extract the title and stat outside the lock (file I/O should not hold the mutex).
 	newTitle, titleOK := extractTitleFromFile(absPath)
+	var newModTime time.Time
+	if fi, err := os.Stat(absPath); err == nil {
+		newModTime = fi.ModTime()
+	}
 
-	// Single lock pass: collect IDs and update titles together.
+	// Single lock pass: collect IDs and update titles/mtime together.
 	var ids []string
-	titleChanged := false
+	metaChanged := false
 	s.mu.Lock()
 	for _, g := range s.groups {
 		for _, entry := range g.Files {
@@ -1011,7 +1022,11 @@ func (s *State) notifyFileChangedByPath(absPath string) {
 				ids = append(ids, entry.ID)
 				if titleOK && entry.Title != newTitle {
 					entry.Title = newTitle
-					titleChanged = true
+					metaChanged = true
+				}
+				if !newModTime.IsZero() && !entry.UpdatedAt.Equal(newModTime) {
+					entry.UpdatedAt = newModTime
+					metaChanged = true
 				}
 			}
 		}
@@ -1021,7 +1036,7 @@ func (s *State) notifyFileChangedByPath(absPath string) {
 	if len(ids) == 0 {
 		return
 	}
-	if titleChanged {
+	if metaChanged {
 		s.sendEvent(sseEvent{Name: eventUpdate, Data: "{}"})
 	}
 	s.notifyFileChanged(ids)
